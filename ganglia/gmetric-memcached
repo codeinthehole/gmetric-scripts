@@ -1,0 +1,73 @@
+#! /bin/bash
+#
+# Get statistics from memcached and feed them into Ganglia for monitoring.#
+# 
+# @todo Make this work with deltas between requests
+#
+# @author David Winterbottom
+
+# Config
+declare -r GMETRIC=/usr/bin/gmetric
+declare -r DATA_FOLDER=/tmp/ganglia
+declare -r DATA_FILE="${DATA_FOLDER}/memcached-stats"
+declare HOST=$1
+declare PORT=$2
+
+# Default values
+if test -z "$HOST" ; then
+	HOST=localhost
+fi
+if test -z "$PORT" ; then
+	PORT=11211
+fi
+
+# Sanity checks
+if test ! -d "$DATA_FOLDER" ; then
+    printf "The folder $DATA_FOLDER does not exist - attempting to create... ";
+    mkdir -p "$DATA_FOLDER"
+    if [ $? != 0 ] ; then
+        printf "...failed! Exiting\n"
+        exit 192
+    fi
+    printf "...success!\n";
+fi
+if test -z "$GMETRIC" ; then
+    printf "The command $GMETRIC is not available";
+    exit 192
+fi
+
+# Function for submiting metrics using gmetric
+# Takes 3 parameters:
+#   1. Statistic name (used to grep for)
+#   2. Human-friendly name for statistic
+#   3. Metric type
+function gmetric_submit
+{
+    if [ $# -ne 3 ]; then
+        printf "Incorrect number of arguments\n"
+        exit 192
+    fi
+    LOOKUP_VAR=$1
+    GANGLIA_NAME=$2
+    GANGLIA_TYPE=$3
+    GANGLIA_VALUE=`grep "$LOOKUP_VAR[^_]" "$DATA_FILE" | awk '{print $3}'`
+    printf "Absolute value of $GANGLIA_NAME: $GANGLIA_VALUE\n"
+    # $GMETRIC --type "$GANGLIA_TYPE" --name "$GANGLIA_NAME" --value $GANGLIA_VALUE
+}
+
+# Read memcached statistics into a temporary file
+echo -en "stats\r\n" "quit\r\n" | nc $HOST $PORT > "$DATA_FILE"
+if [ $? != 0 ] ; then
+	printf "Could not get memcached stats! Exiting\n"
+	exit 192
+fi
+
+# Submit metrics to Ganglia
+gmetric_submit curr_items CurrentItems int32
+gmetric_submit total_items TotalItems int32
+gmetric_submit curr_connections CurrentConnections int32
+gmetric_submit total_connections TotalConnections int32
+gmetric_submit cmd_get GetCommands int32
+gmetric_submit cmd_set SetCommands int32
+gmetric_submit get_hits GetHits int32
+gmetric_submit get_misses GetMisses int32
