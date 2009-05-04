@@ -1,0 +1,83 @@
+#! /bin/bash
+#
+# Get statistics from Apache and feed them into Ganglia for monitoring.  This works by
+# using the server status module to provide statistics on the status of apache.  These
+# results are read into a temporary file so they can be compared to those from the previous
+# analysis.
+#
+# The host name to use must be specified as the first argument to this script. 
+#
+# Results from /server-status take the form:
+#
+#   Total Accesses: 2041
+#   Total kBytes: 17405
+#   CPULoad: .292243
+#   Uptime: 16979
+#   ReqPerSec: .120207
+#   BytesPerSec: 1049.69
+#   BytesPerReq: 8732.35
+#   BusyWorkers: 1
+#   IdleWorkers: 23
+#
+# @author David Winterbottom
+
+# Config
+declare -r GMETRIC=/usr/bin/gmetric
+declare -r DATA_FOLDER=/tmp/ganglia
+declare -r DATA_FILE="${DATA_FOLDER}/apache-stats"
+declare -r URI="server-status?auto"
+declare -r HOST=$1
+
+# Sanity checks
+if test -z "$HOST" ; then
+    printf "Please specify a host to analyse"
+    exit 192
+fi
+if test ! -d "$DATA_FOLDER" ; then
+    printf "The folder $DATA_FOLDER does not exist - attempting to create... ";
+    mkdir -p "$DATA_FOLDER"
+    if [ $? != 0 ] ; then
+        printf "...failed! Exiting\n"
+        exit 192
+    fi
+    printf "...success!\n";
+fi
+if test -z "$GMETRIC" ; then
+    printf "The command $GMETRIC is not available";
+    exit 192
+fi
+
+# Function for submiting metrics using gmetric
+function record_count
+{
+    if [ $# -ne 3 ]; then
+        printf "Incorrect number of arguments\n"
+        exit 192
+    fi
+    LOOKUP_VAR=$1
+    GANGLIA_NAME=$2
+    GANGLIA_TYPE=$3
+    GANGLIA_VALUE=`grep "$LOOKUP_VAR[^_]" "$DATA_FILE" | awk '{print $2}'`
+    printf "Absolute value of $GANGLIA_NAME: $GANGLIA_VALUE\n"
+    $GMETRIC --type "$GANGLIA_TYPE" --name "$GANGLIA_NAME" --value $GANGLIA_VALUE
+}
+
+# Read apache statistics into a temporary file
+FULL_URL="$HOST$URI"
+printf "Getting Apache statistcs from %s\n" "$FULL_URL"
+wget "$FULL_URL" -o /dev/null
+
+# Check a download has been made
+if test ! -f "$URI" ; then
+    printf "No file $URI has been downloaded - exiting\n"
+    exit 192
+fi
+mv $URI $DATA_FILE
+
+# Submit metrics to Ganglia
+record_count "BytesPerSec" "APACHE_BYTES_PER_SECOND" "float"
+record_count "BytesPerReq" "APACHE_BYTES_PER_REQUEST" "float"
+record_count "BusyWorkers" "APACHE_BUSY_WORKERS" "uint32"
+record_count "IdleWorkers" "APACHE_IDLE_WORKERS" "uint32"
+record_count "CPULoad" "APACHE_CPU_LOAD" "float"
+record_count "ReqPerSec" "APACHE_REQUESTS_PER_SECOND" "float"
